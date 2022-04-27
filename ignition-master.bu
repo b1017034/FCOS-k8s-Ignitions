@@ -26,6 +26,7 @@ systemd:
         ExecStartPre=setenforce 0
         ExecStart=/var/home/core/init/selinux-disable.sh
 
+    #cni install
     - name: cni-install.service
       enabled: true
       contents: |
@@ -39,6 +40,7 @@ systemd:
         Type=oneshot
         ExecStart=/var/home/core/init/cni-install.sh
 
+    #crictl install
     - name: crictl-install.service
       enabled: true
       contents: |
@@ -52,6 +54,7 @@ systemd:
         Type=oneshot
         ExecStart=/var/home/core/init/crictl-install.sh
 
+    #kubelet install
     - name: k8s-install.service
       enabled: true
       contents: |
@@ -66,6 +69,7 @@ systemd:
         ExecStartPre=setenforce 0
         ExecStart=/var/home/core/init/k8s-install.sh
 
+    #kubeadm install
     - name: kubeadm-install.service
       enabled: true
       contents: |
@@ -81,8 +85,24 @@ systemd:
         ExecStartPre=setenforce 0
         ExecStart=/var/home/core/init/kubeadm-install.sh
 
+    - name: metallb-install.service
+      enabled: true
+      contents: |
+        [Install]
+        WantedBy=multi-user.target
+        [Unit]
+        Description=kubeadm installation script
+        Requires=kubeadm-install.service
+        After=kubeadm-install.service
+        [Service]
+        Type=oneshot
+        Environment="PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/var/home/core/bin"
+        ExecStartPre=setenforce 0
+        ExecStart=/var/home/core/init/metallb-install.sh
+
 storage:
   files:
+    #stable ip address
     - path: /etc/NetworkManager/system-connections/enp3s0.nmconnection
       mode: 0600
       overwrite: true
@@ -93,7 +113,7 @@ storage:
           interface-name=<Your Interface Name>
 
           [ethernet]
-          mac-address=<Your Inerface Mac Address>
+          mac-address=<Your Interface Mac Address>
 
           [ipv4]
           method=manual
@@ -101,12 +121,13 @@ storage:
           gateway=<Gateway>
           dns=<DNS>
 
+    #host name
     - path: /etc/hostname
       overwrite: true
       mode: 0644
       contents:
         inline: <YOUR HOST NAME>
-
+    #selinux disable
     - path: /var/home/core/init/selinux-disable.sh
       contents:
         inline: |
@@ -115,7 +136,7 @@ storage:
           setenforce 0
           sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
       mode: 0755
-
+    #cni plugins
     - path: /var/home/core/init/cni-plugins-v0.8.5.tgz
       contents:
         source: https://github.com/containernetworking/plugins/releases/download/v0.8.5/cni-plugins-linux-arm64-v0.8.5.tgz
@@ -136,7 +157,7 @@ storage:
           mkdir -p /var/home/core/cni/bin
           tar -C /var/home/core/cni/bin -xvf cni-plugins-${CNI_VERSION}.tgz
       mode: 0755
-
+    #crictl
     - path: /var/home/core/init/crictl-v1.17.0.tar.gz
       contents:
         source: https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.17.0/crictl-v1.17.0-linux-amd64.tar.gz
@@ -157,33 +178,33 @@ storage:
           mkdir -p /var/home/core/bin
           tar -C /var/home/core/bin -xvf crictl-${CRICTL_VERSION}.tgz
       mode: 0755
-
+    #kubeadm
     - path: /var/home/core/bin/kubeadm
       contents:
         source: https://storage.googleapis.com/kubernetes-release/release/v1.18.0/bin/linux/amd64/kubeadm
       mode: 0755
-
+    #kubelet
     - path: /var/home/core/bin/kubelet
       contents:
         source: https://storage.googleapis.com/kubernetes-release/release/v1.18.0/bin/linux/amd64/kubelet
       mode: 0755
-
+    #kubectl
     - path: /var/home/core/bin/kubectl
       contents:
         source: https://storage.googleapis.com/kubernetes-release/release/v1.18.0/bin/linux/amd64/kubectl
       mode: 0755
-
+    #kubelet service
     - path: /etc/systemd/system/kubelet.service
       contents:
         source: https://raw.githubusercontent.com/kubernetes/kubernetes/v1.17.4/build/debs/kubelet.service
       mode: 0755
-
+    #kubeadm conf
     - path: /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
       contents:
         source: https://raw.githubusercontent.com/kubernetes/kubernetes/v1.17.4/build/debs/10-kubeadm.conf
       mode: 0755
 
-    # setup k8s
+    #setup k8s
     - path: /var/home/core/init/k8s-install.sh
       contents:
         inline: |
@@ -202,7 +223,7 @@ storage:
           systemctl start kubelet
       mode: 0755
 
-    # for Flannel
+    #for install Flannel
     - path: /var/home/core/init/kubeadm-custom.yaml
       overwrite: true
       contents:
@@ -221,7 +242,7 @@ storage:
           networking:
             podSubnet: 10.244.0.0/16
       mode: 0755
-
+    #install kubeadm
     - path: /var/home/core/init/kubeadm-install.sh
       contents:
         inline: |
@@ -250,7 +271,7 @@ storage:
           echo "=> Installing Flannel"
           kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
       mode: 0755
-
+    #metallb config
     - path: /var/home/core/init/metallb-configmap.yaml
       contents:
         inline: |
@@ -265,8 +286,10 @@ storage:
               - name: default
                 protocol: layer2
                 addresses:
-                - 192.168.1.210-192.168.1.220
+                - <YOUR IP RANGE>
+#                - 192.168.1.210-192.168.1.220
 
+    #metallb install
     - path: /var/home/core/init/metallb-install.sh
       contents:
         inline: |
@@ -281,6 +304,7 @@ storage:
           kubectl apply -f /var/home/core/init/metallb-configmap.yaml
           cp /var/home/core/init/metallb-configmap.yaml /var/home/core/init/metallb-configmap.yaml.lock
 
+    #docker conf
     - path: /etc/systemd/system/docker.service.d/docker.conf
       overwrite: true
       contents:
@@ -289,7 +313,7 @@ storage:
           ExecStart=
           ExecStart=/usr/bin/dockerd --exec-opt native.cgroupdriver=systemd --log-driver=json-file --log-opt max-size=100m
       mode: 0755
-
+    #k8s conf
     - path: /etc/sysctl.d/k8s.conf
       overwrite: true
       contents:

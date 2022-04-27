@@ -1,0 +1,254 @@
+variant: fcos
+version: 1.0.0
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ssh-rsa <YOUR SSH public key file>
+      groups: [ sudo, docker ]
+systemd:
+  units:
+    - name: docker.service
+      enabled: true
+
+    #SELinux disable
+    - name: selinux-disable.service
+      enabled: true
+      contents: |
+        [Install]
+        WantedBy=multi-user.target
+        [Unit]
+        Description=selinux disable script
+        Wants=network-online.target
+        After=network.target network-online.target
+        [Service]
+        Type=oneshot
+        ExecStartPre=setenforce 0
+        ExecStart=/var/home/core/init/selinux-disable.sh
+
+    #cni install
+    - name: cni-install.service
+      enabled: true
+      contents: |
+        [Install]
+        WantedBy=multi-user.target
+        [Unit]
+        Description=cni plugin installation script
+        Requires=nftables-disable.target
+        After=nftables-disable.target
+        [Service]
+        Type=oneshot
+        ExecStart=/var/home/core/init/cni-install.sh
+
+    #crictl install
+    - name: crictl-install.service
+      enabled: true
+      contents: |
+        [Install]
+        WantedBy=multi-user.target
+        [Unit]
+        Description=crictl installation script
+        Requires=cni-install.service
+        After=cni-install.service
+        [Service]
+        Type=oneshot
+        ExecStart=/var/home/core/init/crictl-install.sh
+
+    #kubelet install
+    - name: k8s-install.service
+      enabled: true
+      contents: |
+        [Install]
+        WantedBy=multi-user.target
+        [Unit]
+        Description=k8s installation script
+        Requires=crictl-install.service
+        After=crictl-install.service
+        [Service]
+        Type=oneshot
+        ExecStartPre=setenforce 0
+        ExecStart=/var/home/core/init/k8s-install.sh
+
+    #kubeadm join
+    - name: kubeadm-join.service
+      enabled: true
+      contents: |
+        [Install]
+        WantedBy=multi-user.target
+        [Unit]
+        Description=kubeadm join script
+        Requires=k8s-install.service
+        After=k8s-install.service
+        [Service]
+        Type=oneshot
+        Environment="PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/var/home/core/bin"
+        ExecStartPre=setenforce 0
+        ExecStart=/var/home/core/init/kubeadm-join.sh
+
+storage:
+  files:
+    #stable ip address
+    - path: /etc/NetworkManager/system-connections/enp3s0.nmconnection
+      mode: 0600
+      overwrite: true
+      contents:
+        inline: |
+          [connection]
+          type=ethernet
+          interface-name=<Your Interface Name>
+
+          [ethernet]
+          mac-address=<Your Inerface Mac Address>
+
+          [ipv4]
+          method=manual
+          addresses=<Static IP>
+          gateway=<Gateway>
+          dns=<DNS>
+
+    #host name
+    - path: /etc/hostname
+      overwrite: true
+      mode: 0644
+      contents:
+        inline: <YOUR HOST NAME>
+    #selinux disable
+    - path: /var/home/core/init/selinux-disable.sh
+      contents:
+        inline: |
+          #!/bin/bash
+
+          setenforce 0
+          sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
+      mode: 0755
+    #cni plugins
+    - path: /var/home/core/init/cni-plugins-v0.8.5.tgz
+      contents:
+        source: https://github.com/containernetworking/plugins/releases/download/v0.8.5/cni-plugins-linux-arm64-v0.8.5.tgz
+      mode: 0755
+
+    # tar cni
+    - path: /var/home/core/init/cni-install.sh
+      contents:
+        inline: |
+          #!/bin/bash
+
+          # Unzip the kubernetes binaries if not already exists
+          test -d /var/home/core/cni/bin && echo "CNI binaries already installed" && exit 0
+
+          CNI_VERSION="v0.8.5"
+          echo -e "=> Installing CNI ${CNI_VERSION} binaries to /var/home/core/cni/bin"
+          cd /var/home/core/init
+          mkdir -p /var/home/core/cni/bin
+          tar -C /var/home/core/cni/bin -xvf cni-plugins-${CNI_VERSION}.tgz
+      mode: 0755
+    #crictl
+    - path: /var/home/core/init/crictl-v1.17.0.tar.gz
+      contents:
+        source: https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.17.0/crictl-v1.17.0-linux-amd64.tar.gz
+      mode: 0755
+
+    # tar crictl
+    - path: /var/home/core/init/crictl-install.sh
+      contents:
+        inline: |
+          #!/bin/bash
+
+          # Unzip the crictl if not already exists
+          test -d /var/home/core/bin && echo "CRICTL already installed" && exit 0
+
+          CRICTL_VERSION="v1.17.0"
+          echo -e "=> Installing CRICTL ${CRICTL_VERSION} to /var/home/core/bin"
+          cd /var/home/core/init
+          mkdir -p /var/home/core/bin
+          tar -C /var/home/core/bin -xvf crictl-${CRICTL_VERSION}.tgz
+      mode: 0755
+    #kubeadm
+    - path: /var/home/core/bin/kubeadm
+      contents:
+        source: https://storage.googleapis.com/kubernetes-release/release/v1.18.0/bin/linux/amd64/kubeadm
+      mode: 0755
+    #kubelet
+    - path: /var/home/core/bin/kubelet
+      contents:
+        source: https://storage.googleapis.com/kubernetes-release/release/v1.18.0/bin/linux/amd64/kubelet
+      mode: 0755
+    #kubectl
+    - path: /var/home/core/bin/kubectl
+      contents:
+        source: https://storage.googleapis.com/kubernetes-release/release/v1.18.0/bin/linux/amd64/kubectl
+      mode: 0755
+    #kubelet service
+    - path: /etc/systemd/system/kubelet.service
+      contents:
+        source: https://raw.githubusercontent.com/kubernetes/kubernetes/v1.17.4/build/debs/kubelet.service
+      mode: 0755
+    #kubeadm conf
+    - path: /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+      contents:
+        source: https://raw.githubusercontent.com/kubernetes/kubernetes/v1.17.4/build/debs/10-kubeadm.conf
+      mode: 0755
+
+    #setup k8s
+    - path: /var/home/core/init/k8s-install.sh
+      contents:
+        inline: |
+          #!/bin/bash
+
+          # Exit 0 if already present kubernetes binary
+          test -d /usr/local/bin/kubeadm && echo "k8s binaries (kubeadm) already installed" && exit 0
+          # NOTE: If RELEASE is updated, the SHA512 SUMs will need to be as well
+          echo -e "=> Installing k8s v1.17.0"
+          echo "=> Cusomizing kubelet.service..."
+          sed -i "s:/usr/bin:/var/home/core/bin:g" /etc/systemd/system/kubelet.service
+          sed -i "s:/usr/bin:/var/home/core/bin:g" /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+          echo "=> enable kubelet..."
+          systemctl daemon-reload
+          systemctl enable kubelet
+          systemctl start kubelet
+      mode: 0755
+    - path: /var/home/core/init/node-join-config.yaml
+      contents:
+        inline: |
+          apiVersion: kubeadm.k8s.io/v1beta2
+          kind: JoinConfiguration
+          discovery:
+            bootstrapToken:
+              token: "<YOUR MASTER NODE TOKEN>"
+              caCertHashes:
+              - "kubeadm joinコマンドのdiscovery-token-ca-cert-hashを指定"
+              apiServerEndpoint: "<YOUR MASTER NODE IP ADDRESS>:6443"
+          nodeRegistration:
+            kubeletExtraArgs:
+              volume-plugin-dir: "/opt/libexec/kubernetes/kubelet-plugins/volume/exec/"
+    #join master k8s
+    - path: /var/home/core/init/kubeadm-join.sh
+      contents:
+        inline: |
+          #!/bin/bash
+          # Ensure kubeadm binary is present
+          test -f /var/home/core/bin/kubeadm || (echo "Failed to find kubeadm binary" && exit 1)
+          # Exit if kubeadm has already been run (/etc/kubernetes folder would have been created)
+          test -d /etc/kubernetes && echo "/etc/kubernetes is present, kubeadm should have already been run once" && exit 0
+          
+          echo "=> joining master node"
+          sudo kubeadm join <YOUR MASTER NODE IP ADDRESS>:6443 --config=/var/home/core/init/node-join-config.yaml
+      mode: 0755
+    #docker conf
+    - path: /etc/systemd/system/docker.service.d/docker.conf
+      overwrite: true
+      contents:
+        inline: |
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/dockerd --exec-opt native.cgroupdriver=systemd --log-driver=json-file --log-opt max-size=100m
+      mode: 0755
+    #k8s conf
+    - path: /etc/sysctl.d/k8s.conf
+      overwrite: true
+      contents:
+        inline: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.ipv4.ip_forward                 = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+      mode: 0755
